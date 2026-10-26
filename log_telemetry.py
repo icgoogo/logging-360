@@ -1,0 +1,129 @@
+import os
+import re
+import subprocess
+import time
+
+LOG_FILE = os.getenv("NETWORK_TELEMETRY_CSV", "network_telemetry.csv")
+
+# Monitored ports
+RTMP_PORT = "1935"
+RTSP_PORT = "8554"
+
+
+def parse_endpoint(addr_str):
+    """Safely extracts IP and port from IPv4, IPv6, and bracketed addresses."""
+    addr_str = addr_str.strip()
+    if ":" in addr_str:
+        ip, port = addr_str.rsplit(":", 1)
+        return ip.strip("[]"), port
+    return addr_str, ""
+
+
+# Initialize CSV File Header with rtt_ms and srtt_ms
+with open(LOG_FILE, "w", buffering=1) as f:
+    f.write(
+        "timestamp,sport,dport,peer_ip,recv_q_bytes,send_q_bytes,rtt_ms,srtt_ms\n"
+    )
+
+print(f"[*] Logging raw socket telemetry to {LOG_FILE}")
+print(
+    f"[*] Polling ports {RTMP_PORT} (RTMP) and {RTSP_PORT} (RTSP) every 1s. Press Ctrl+C to stop...\n"
+)
+
+no_conn_counter = 0
+
+try:
+    with open(LOG_FILE, "a", buffering=1) as log_f:
+        while True:
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            recorded_count = 0
+
+            try:
+                cmd = [
+                    "ss",
+                    "-Htinp",
+                    f"( sport = :{RTMP_PORT} or dport = :{RTMP_PORT} or sport = :{RTSP_PORT} or dport = :{RTSP_PORT} )",
+                ]
+                raw_output = subprocess.check_output(
+                    cmd, stderr=subprocess.STDOUT
+                )
+                output = raw_output.decode("utf-8", errors="ignore")
+                lines = [
+                    l.strip() for l in output.strip().split("\n") if l.strip()
+                ]
+
+                i = 0
+                while i < len(lines):
+                    line = lines[i]
+                    if line.startswith("ESTAB"):
+                        parts = line.split()
+                        if len(parts) >= 5:
+                            recv_q = parts[1]
+                            send_q = parts[2]
+                            local_addr = parts[3]
+                            peer_addr = parts[4]
+
+                            _, sport = parse_endpoint(local_addr)
+                            peer_ip, dport = parse_endpoint(peer_addr)
+
+                            rtt = "0.0"
+                            srtt = "0.0"
+
+                            # Consume all metric lines for this socket
+                            i += 1
+                            while i < len(lines) and not lines[
+                                i
+                            ].startswith("ESTAB"):
+                                metric_line = lines[i]
+
+                                # Extract RTT / SRTT from ss -i output
+                                # ss outputs 'rtt:<srtt>/<rttvar>' and optionally 'minrtt:<min_rtt>'
+                                rtt_match = re.search(
+                                    r"rtt:([\d\.]+)", metric_line
+                                )
+                                if rtt_match:
+                                    srtt = rtt_match.group(1)
+                                    rtt = srtt  # Default raw RTT to SRTT value
+
+                                minrtt_match = re.search(
+                                    r"minrtt:([\d\.]+)", metric_line
+                                )
+                                if minrtt_match:
+                                    rtt = minrtt_match.group(1)
+
+                                i += 1
+
+                            log_f.write(
+                                f"{timestamp},{sport},{dport},{peer_ip},{recv_q},{send_q},{rtt},{srtt}\n"
+                            )
+                            recorded_count += 1
+                            continue
+
+                    i += 1
+
+                if recorded_count > 0:
+                    no_conn_counter = 0
+                    print(
+                        f"[{timestamp}] Logged {recorded_count} active socket(s) to {LOG_FILE}"
+                    )
+                else:
+                    no_conn_counter += 1
+                    if no_conn_counter % 5 == 1:
+                        print(
+                            f"[{timestamp}] Waiting for active streams on port {RTMP_PORT}/{RTSP_PORT}..."
+                        )
+
+            except FileNotFoundError:
+                print(
+                    "\n[-] ERROR: 'ss' command not found! Run this on the Linux GPU server."
+                )
+                break
+            except subprocess.CalledProcessError as e:
+                print(f"[!] 'ss' execution failed: {e.output.strip()}")
+            except Exception as e:
+                print(f"[!] Telemetry error: {e}")
+
+            time.sleep(1)
+
+except KeyboardInterrupt:
+    print("\n[+] Telemetry logging stopped cleanly.")
