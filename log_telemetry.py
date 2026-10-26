@@ -3,7 +3,8 @@ import re
 import subprocess
 import time
 
-LOG_FILE = os.getenv("NETWORK_TELEMETRY_CSV", "network_telemetry.csv")
+timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+LOG_FILE = os.getenv("NETWORK_TELEMETRY_CSV", f"network_telemetry_{timestamp}.csv")
 
 # Monitored server ports
 RTMP_PORT = "1935"
