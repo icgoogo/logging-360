@@ -3,13 +3,12 @@ import re
 import subprocess
 import time
 
-timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+timestamp = time.strftime("%Y-%m-%d_%H-%M-%S")
 LOG_FILE = os.getenv("NETWORK_TELEMETRY_CSV", f"network_telemetry_{timestamp}.csv")
 
 # Monitored server ports
 RTMP_PORT = "1935"
 RTSP_PORT = "8554"
-
 
 def parse_endpoint(addr_str):
     """Safely extracts IP and port from IPv4, IPv6, and bracketed addresses."""
