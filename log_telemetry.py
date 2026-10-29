@@ -10,6 +10,7 @@ LOG_FILE = os.getenv("NETWORK_TELEMETRY_CSV", f"network_telemetry_{timestamp}.cs
 RTMP_PORT = "1935"
 RTSP_PORT = "8554"
 
+
 def parse_endpoint(addr_str):
     """Safely extracts IP and port from IPv4, IPv6, and bracketed addresses."""
     addr_str = addr_str.strip()
@@ -30,9 +31,11 @@ def parse_rtt_value(raw_val, unit_str):
         return 0.0
 
 
-# Initialize CSV File Header
+# Initialize CSV File Header with all original columns + details
 with open(LOG_FILE, "w", buffering=1, encoding="utf-8") as f:
-    f.write("timestamp,sport,dport,peer_ip,recv_q_bytes,send_q_bytes,rtt_ms,srtt_ms\n")
+    f.write(
+        "timestamp,sport,dport,peer_ip,recv_q_bytes,send_q_bytes,rtt_ms,srtt_ms,details\n"
+    )
 
 print(f"[*] Logging server-side raw socket telemetry to {LOG_FILE}")
 print(
@@ -48,8 +51,6 @@ try:
             recorded_count = 0
 
             try:
-                # FIX 1: Filter strictly by SERVER SOURCE PORT (sport) to prevent
-                # double-counting loopback connections on 127.0.0.1
                 cmd = [
                     "ss",
                     "-Htinp",
@@ -75,13 +76,15 @@ try:
 
                             srtt_val = 0.0
                             minrtt_val = 0.0
+                            detail_lines = []
 
                             # Consume all metric lines belonging to this socket block
                             i += 1
                             while i < len(lines) and not lines[i].startswith("ESTAB"):
                                 metric_line = lines[i]
+                                detail_lines.append(metric_line)
 
-                                # FIX 2: Unit-aware RTT extraction (handles 'us', 'ms', and raw floats)
+                                # Unit-aware RTT extraction
                                 rtt_match = re.search(
                                     r"rtt:([\d\.]+)(us|ms)?", metric_line
                                 )
@@ -100,11 +103,15 @@ try:
 
                                 i += 1
 
-                            # If minrtt is missing, fall back to srtt
+                            # Fallback to srtt if minrtt is missing
                             rtt_out = minrtt_val if minrtt_val > 0.0 else srtt_val
 
+                            # Escape double quotes for CSV compliance
+                            raw_details = " | ".join(detail_lines).replace('"', '""')
+
                             log_f.write(
-                                f"{timestamp},{sport},{dport},{peer_ip},{recv_q},{send_q},{rtt_out:.3f},{srtt_val:.3f}\n"
+                                f'{timestamp},{sport},{dport},{peer_ip},{recv_q},{send_q},'
+                                f'{rtt_out:.3f},{srtt_val:.3f},"{raw_details}"\n'
                             )
                             recorded_count += 1
                             continue
@@ -127,7 +134,9 @@ try:
                 print("\n[-] ERROR: 'ss' command not found on host system.")
                 break
             except subprocess.CalledProcessError as e:
-                print(f"[!] 'ss' execution failed: {e.output.decode('utf-8', errors='ignore').strip()}")
+                print(
+                    f"[!] 'ss' execution failed: {e.output.decode('utf-8', errors='ignore').strip()}"
+                )
             except Exception as e:
                 print(f"[!] Telemetry error: {e}")
 
